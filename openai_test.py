@@ -1,6 +1,8 @@
-from agent import Agent
+from openai_agent import OpenAIAgent
 
-from langchain_openai import ChatOpenAI
+from openai import OpenAI
+from datetime import datetime
+from langchain_experimental.tools import PythonREPLTool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.tools import WikipediaQueryRun
 from langchain_community.utilities import WikipediaAPIWrapper
@@ -9,16 +11,10 @@ from langchain_community.tools import DuckDuckGoSearchRun
 import os
 
 api_key = ''
-base_url = ''
-model_name = 'deepseek-ai/DeepSeek-R1'
+base_url = 'https://api.deepseek.com'
+model_name = 'deepseek-reasoner'
 
-model = ChatOpenAI(
-    model=model_name,
-    api_key=api_key,
-    base_url=base_url,
-    temperature=0.6,
-    max_tokens=16000
-)
+client = OpenAI(api_key=api_key, base_url=base_url)
 
 tavily_api_key = ''
 os.environ['TAVILY_API_KEY'] = tavily_api_key
@@ -28,14 +24,17 @@ wikipedia = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
 
 duck_search = DuckDuckGoSearchRun()
 
-tools = [search, wikipedia, duck_search]
+pythonREPLTool = PythonREPLTool()
 
-system_prompt = """
+tools = [search, wikipedia, duck_search, pythonREPLTool]
+
+system_prompt = f"""
 你是一个得力的助手。
+现在时间是：{datetime.now()}
 """
 def main():
     history = []
-    agent = Agent(model, tools, system_prompt)
+    agent = OpenAIAgent(client, model_name, tools, system_prompt)
     print("\nDeepSeek R1 Agent 客户端已启动！输入 'quit' 退出")
 
     while True:
@@ -50,12 +49,12 @@ def main():
             })
 
             history = history[-10:]
-            response = agent.invoke({'history': history}, verbose=True)
+            response = agent.invoke(history, verbose=True)
 
             print(f"\n🤖 DeepSeek: {response['output']}")
 
             history.append({
-                'role': 'ai',
+                'role': 'assistant',
                 'content': response['output']
             })
         except Exception as e:

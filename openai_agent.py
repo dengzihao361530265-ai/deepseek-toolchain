@@ -1,5 +1,5 @@
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from openai import OpenAI
+from openai.types.chat import ChatCompletion
 from typing import Sequence
 from langchain_core.tools import BaseTool
 from langchain_core.output_parsers import StrOutputParser
@@ -9,16 +9,17 @@ import re
 from agent_prompt import tool_declare_prompt
 
 
-class Agent:
-    def __init__(self, model: ChatOpenAI, tools: Sequence[BaseTool], system_prompt: str):
+class OpenAIAgent:
+    def __init__(self, client: OpenAI, model_name: str,  tools: Sequence[BaseTool], system_prompt: str):
         """
         初始化 Agent 类。
 
-        :param model: ChatOpenAI 模型实例。
+        :param model: OpenAI 模型客户端。
         :param tools: 工具列表。
         :param system_prompt: 系统提示。
         """
-        self.model = model
+        self.client = client
+        self.model_name = model_name
         self.tools = tools
 
         # 初始化工具映射
@@ -34,43 +35,44 @@ class Agent:
         self.parser = StrOutputParser()
 
         # 初始化提示模板
-        self.prompt = ChatPromptTemplate([
-            ('system', system_prompt),
-            ('system', tool_declare_prompt),
-            MessagesPlaceholder(variable_name='history')
-        ])
+        self.prompt = [
+            {
+                'role': 'system',
+                'content': system_prompt
+            },
+            {
+                'role': 'system',
+                'content': tool_declare_prompt.format(tools=self.tool_descriptions, tool_names=self.tool_names)
+            }
+        ]
 
-        # 构建链式调用
-        self.chain = self.prompt | self.model | self.parser | self.divide_thought
-
-    def invoke(self, params: dict, max_iteration: int = 5, verbose: bool = False) -> dict:
+    def invoke(self, history: list, max_iteration: int = 5, verbose: bool = False) -> dict:
         """
         调用 Agent。
 
-        :param params: 输入参数。
+        :param history: 历史记录。
         :param max_iteration: 最大迭代次数，默认为 3。
         :param verbose: 调试模式，默认关闭。
         :return: 输出结果。
         """
-        # 添加工具描述和工具名称到参数中
-        params['tools'] = self.tool_descriptions
-        params['tool_names'] = self.tool_names
 
-        # 初始化历史记录
-        if 'history' not in params:
-            params['history'] = []
+        # 另存历史记录
+        local_history = history.copy()
 
         for iteration in range(max_iteration):
             try:
-                # 调用链式调用
-                response = self.chain.invoke(params)
+                # OpenAI调用
+                response = self.divide_thought(self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=self.prompt + local_history
+                ))
             except Exception as e:
-                print(f"\033[91m链式调用失败：{e}\033[0m")
+                print(f"\033[91mOpenAI调用失败：{e}\033[0m")
                 return {}
 
             # 添加工具调用带历史记录
-            params['history'].append({
-                'role': 'ai',
+            local_history.append({
+                'role': 'assistant',
                 'content': response['output']
             })
 
@@ -93,9 +95,9 @@ class Agent:
                     return {}
 
                 # 添加工具调用结果到历史记录
-                params['history'].append({
+                local_history.append({
                     'role': 'user',
-                    'content': call_response
+                    'content': str(call_response)
                 })
 
             # 如果有最终响应
@@ -126,24 +128,17 @@ class Agent:
         self.tool_names = ", ".join([t.name for t in tools])
 
     @staticmethod
-    def divide_thought(response: str) -> dict:
+    def divide_thought(response: ChatCompletion) -> dict:
         """
         分割思考过程。
 
         :param response: 响应内容。
         :return: 分割后的思考过程和输出。
         """
-        if '</think>' in response:
-            thought, output = response.split('</think>', 1)
-            return {
-                'thought': thought.lstrip(),
-                'output': output.lstrip()
-            }
-        else:
-            return {
-                'thought': '',
-                'output': response.lstrip()
-            }
+        return {
+            'thought': response.choices[0].message.reasoning_content,
+            'output': response.choices[0].message.content
+        }
 
     def parse_response(self, response: str) -> dict:
         """
@@ -185,7 +180,7 @@ class Agent:
         """
 
         if verbose:
-            print('\033[94mFunction Call：', function_name, '\033[0m')
+            print('\033[93mFunction Call：', function_name, '\033[0m')
 
         if function_name not in self.tools_map:
             print(f"\033[91m工具 {function_name} 不存在\033[0m")
@@ -198,6 +193,6 @@ class Agent:
             return ""
 
         if verbose:
-            print('\033[94mFunction Response：\n', str(call_result), '\033[0m')
+            print('\033[93mFunction Response：\n', str(call_result), '\033[0m')
 
         return str(call_result)
